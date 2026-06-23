@@ -1,0 +1,21 @@
+{
+  "name": "tahtom-po",
+  "version": "0.1.0",
+  "description": "תחתום-פה — add reusable stamps onto images and sign documents",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "bootstrap": "^5.3.3",
+    "bootstrap-icons": "^1.11.3",
+    "firebase": "^10.12.2",
+    "pdfjs-dist": "^4.4.168"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.3",
+    "vite": "^5.3.3"
+  }
+}

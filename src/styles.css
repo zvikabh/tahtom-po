@@ -1,0 +1,161 @@
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: 'Open Sans', system-ui, sans-serif;
+}
+
+.center-screen {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.login-card {
+  min-width: 320px;
+  max-width: 420px;
+}
+
+/* ---- Editor layout ---- */
+.editor-root {
+  height: 100%;
+}
+
+.editor-toolbar .btn {
+  min-width: 64px;
+  line-height: 1.1;
+}
+.editor-toolbar .btn i {
+  font-size: 1.25rem;
+}
+.tb-label {
+  font-size: 0.7rem;
+  margin-top: 2px;
+}
+
+.editor-body {
+  min-height: 0; /* allow children to scroll */
+}
+
+.editor-canvas-area {
+  position: relative;
+  overflow: auto;
+  background: #e9ecef;
+  padding: 1.5rem;
+}
+
+.editor-empty {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6c757d;
+  font-size: 1.25rem;
+  border: 2px dashed #adb5bd;
+  border-radius: 0.5rem;
+  background: #fff;
+}
+
+.editor-doc {
+  position: relative;
+  margin: 0 auto;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1), 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+.editor-doc > canvas {
+  display: block;
+}
+
+.placed-stamp {
+  cursor: default;
+}
+.placed-stamp.selected {
+  outline: 2px dashed #0d6efd;
+  outline-offset: 2px;
+}
+.stamp-preview {
+  opacity: 0.7;
+}
+
+/* ---- Stamps pane (kept on the right even in RTL) ---- */
+.stamps-pane {
+  width: 360px;
+  flex: 0 0 360px;
+  background: #f8f9fa;
+  /* Physical left border so the divider faces the canvas regardless of RTL. */
+  border-left: 1px solid #dee2e6;
+}
+.stamps-list {
+  overflow-y: auto;
+}
+
+/* Light gray backdrop so blue-on-transparent stamps are visible. */
+.stamp-thumb,
+.se-surface {
+  background-color: #e9ecef;
+}
+
+.stamp-item {
+  border: 1px solid #ced4da;
+  border-radius: 0.375rem;
+  cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.stamp-item:hover {
+  border-color: #0d6efd;
+  box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.2);
+}
+.stamp-thumb {
+  height: 80px;
+  padding: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.stamp-thumb svg {
+  max-width: 100%;
+  max-height: 100%;
+}
+.stamp-del {
+  position: absolute;
+  top: -8px;
+  inset-inline-start: -8px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  line-height: 1;
+  border-radius: 50%;
+}
+
+/* ---- Stamp editor modal ---- */
+.se-surface-wrap {
+  display: flex;
+  justify-content: center;
+  overflow: auto;
+}
+.se-surface {
+  position: relative;
+  border: 1px solid #ced4da;
+  border-radius: 0.375rem;
+  touch-action: none;
+  /* Keep the exact 600x400 size so pointer coords match the SVG viewBox. */
+  flex: 0 0 auto;
+}
+.se-surface svg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.se-text-input {
+  border: 1px dashed #0d6efd;
+  background: rgba(255, 255, 255, 0.6);
+  outline: none;
+  padding: 0;
+  line-height: 1;
+}

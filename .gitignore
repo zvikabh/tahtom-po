@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.claude/
+.firebase/
+*.log
+.DS_Store
+
+# Local Firebase web config (optional — see README)
+.env
+.env.local

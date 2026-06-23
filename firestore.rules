@@ -1,0 +1,27 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // A signed-in user is "allowed" only if their verified email has a document
+    // in the allowed_users collection (managed manually via the Firebase console).
+    function allowed() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/allowed_users/$(request.auth.token.email));
+    }
+
+    // Whitelist. A user may read only their own entry (to learn whether they are
+    // allowed); nobody may write — entries are added by an admin in the console.
+    match /allowed_users/{email} {
+      allow read: if request.auth != null && request.auth.token.email == email;
+      allow write: if false;
+    }
+
+    // Each user's stamps are private to that user. Signatures/ID numbers must
+    // never be readable by anyone else.
+    match /users/{uid}/stamps/{stampId} {
+      allow read, write: if request.auth.uid == uid && allowed();
+    }
+  }
+}
