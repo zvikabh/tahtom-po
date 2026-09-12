@@ -33,9 +33,12 @@ npm run dev
 
 ## Deploy
 ```bash
-npm run build
 npx firebase deploy --only firestore:rules,hosting
 ```
+
+The hosting `predeploy` hook in `firebase.json` runs `npm run build` automatically, so the
+deployed `dist/` is always freshly built (deploying stale assets was previously a foot-gun —
+`npm run dev` never writes `dist/`).
 
 The Firestore security rules (`firestore.rules`) enforce the whitelist server-side and ensure
 each user can read/write **only their own** stamps.
