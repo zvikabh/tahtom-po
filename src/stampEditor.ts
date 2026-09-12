@@ -29,7 +29,7 @@ export interface NewStamp {
 export function openStampEditor(): Promise<NewStamp | null> {
   return new Promise((resolve) => {
     const elements: StampElement[] = [];
-    let tool: Tool = 'pen';
+    let tool: Tool = 'text';
     let font: StampFont = 'open-sans';
     let settled = false;
 
