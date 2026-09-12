@@ -85,8 +85,8 @@ body {
 
 /* ---- Stamps pane (kept on the right even in RTL) ---- */
 .stamps-pane {
-  width: 360px;
-  flex: 0 0 360px;
+  width: 160px;
+  flex: 0 0 160px;
   background: #f8f9fa;
   /* Physical left border so the divider faces the canvas regardless of RTL. */
   border-left: 1px solid #dee2e6;
@@ -112,7 +112,7 @@ body {
   box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.2);
 }
 .stamp-thumb {
-  height: 80px;
+  height: 50px;
   padding: 6px;
   display: flex;
   align-items: center;
