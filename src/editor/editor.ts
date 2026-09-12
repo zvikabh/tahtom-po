@@ -102,6 +102,11 @@ export function mountEditor(container: HTMLElement, uid: string): void {
       for (const s of stamps) stampCache.set(s.id, s);
       render();
     },
+    // After creating a stamp, if a document is loaded, jump straight into
+    // placement mode with it; otherwise leave it in the pane silently.
+    onStampAdded: (stamp) => {
+      if (current.background) enterPlacement(stamp);
+    },
   });
   // Insert the pane before the canvas area so that, under RTL, it sits on the
   // right (the first flex item is at the start = right edge in RTL).

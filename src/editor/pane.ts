@@ -45,6 +45,8 @@ function makeDateStamp(): Stamp {
 export interface PaneCallbacks {
   onPick(stamp: Stamp): void;
   onStampsLoaded(stamps: Stamp[]): void;
+  // Called right after a new stamp is created and saved.
+  onStampAdded(stamp: Stamp): void;
 }
 
 export interface StampsPane {
@@ -146,8 +148,22 @@ export function createStampsPane(uid: string, cb: PaneCallbacks): StampsPane {
   addBtn.addEventListener('click', async () => {
     const result = await openStampEditor();
     if (!result) return;
-    await addStamp(uid, result.elements, result.width, result.height);
+    let id: string;
+    try {
+      id = await addStamp(uid, result.elements, result.width, result.height);
+    } catch {
+      showToast('שמירת החותמת נכשלה.', 'danger');
+      return;
+    }
     await reload();
+    // Reload has refreshed the editor's stamp cache (via onStampsLoaded), so the
+    // new stamp can now be placed by id.
+    cb.onStampAdded({
+      id,
+      elements: result.elements,
+      width: result.width,
+      height: result.height,
+    });
   });
 
   void reload();
