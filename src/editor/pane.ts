@@ -1,5 +1,12 @@
-// Right-hand pane listing the user's stamps, with delete (x) and add (+).
-import { listStamps, addStamp, deleteStamp } from '../stamps/service';
+// Right-hand pane listing the user's stamps, with delete, add (+), and
+// drag-to-reorder.
+import Sortable from 'sortablejs';
+import {
+  listStamps,
+  addStamp,
+  deleteStamp,
+  reorderStamps,
+} from '../stamps/service';
 import {
   createSvgElement,
   computeBounds,
@@ -62,6 +69,13 @@ export function createStampsPane(uid: string, cb: PaneCallbacks): StampsPane {
   list.className = 'stamps-list flex-grow-1 p-2 d-flex flex-column gap-2';
   el.appendChild(list);
 
+  // The date stamp is pinned above the reorderable list of the user's stamps.
+  const dateHolder = document.createElement('div');
+  dateHolder.className = 'd-flex flex-column gap-2';
+  const sortableEl = document.createElement('div');
+  sortableEl.className = 'stamps-sortable d-flex flex-column gap-2';
+  list.append(dateHolder, sortableEl);
+
   const footer = document.createElement('div');
   footer.className = 'p-2 border-top text-center';
   const addBtn = document.createElement('button');
@@ -74,7 +88,7 @@ export function createStampsPane(uid: string, cb: PaneCallbacks): StampsPane {
 
   function renderStamp(stamp: Stamp, deletable = true): HTMLElement {
     const item = document.createElement('div');
-    item.className = 'stamp-item position-relative';
+    item.className = 'stamp-item';
     item.title = deletable
       ? 'לחצו כדי להניח את החותמת'
       : 'חותמת תאריך היום — לחצו כדי להניח';
@@ -90,11 +104,22 @@ export function createStampsPane(uid: string, cb: PaneCallbacks): StampsPane {
     item.appendChild(thumb);
 
     if (deletable) {
+      item.dataset.id = stamp.id;
+
+      // Drag handle (right/leading edge in RTL) for reordering. Rendered as a
+      // full-height dotted strip via CSS.
+      const handle = document.createElement('div');
+      handle.className = 'stamp-handle';
+      handle.title = 'גררו כדי לשנות את הסדר';
+      handle.addEventListener('click', (e) => e.stopPropagation());
+      item.appendChild(handle);
+
       const del = document.createElement('button');
       del.type = 'button';
-      del.className = 'stamp-del btn btn-sm btn-danger';
+      del.className = 'stamp-del';
       del.title = 'מחיקת חותמת';
-      del.textContent = '×';
+      del.setAttribute('aria-label', 'מחיקת חותמת');
+      del.innerHTML = '<i class="bi bi-trash"></i>';
       del.addEventListener('click', async (e) => {
         e.stopPropagation();
         const ok = await confirmDialog('למחוק חותמת זו?', {
@@ -118,7 +143,7 @@ export function createStampsPane(uid: string, cb: PaneCallbacks): StampsPane {
   }
 
   async function reload(): Promise<void> {
-    list.innerHTML =
+    sortableEl.innerHTML =
       '<div class="text-muted small text-center py-3">טוען חותמות…</div>';
     let stamps: Stamp[] = [];
     let failed = false;
@@ -128,22 +153,44 @@ export function createStampsPane(uid: string, cb: PaneCallbacks): StampsPane {
       failed = true;
     }
 
-    list.innerHTML = '';
-    // The date stamp is always present and always first.
+    // The date stamp is always present and always first (not reorderable).
+    dateHolder.innerHTML = '';
     const dateStamp = makeDateStamp();
-    list.appendChild(renderStamp(dateStamp, false));
+    dateHolder.appendChild(renderStamp(dateStamp, false));
 
+    sortableEl.innerHTML = '';
     if (failed) {
       const err = document.createElement('div');
       err.className = 'text-danger small text-center py-3';
       err.textContent = 'שגיאה בטעינת החותמות.';
-      list.appendChild(err);
+      sortableEl.appendChild(err);
     } else {
-      for (const s of stamps) list.appendChild(renderStamp(s));
+      for (const s of stamps) sortableEl.appendChild(renderStamp(s));
     }
 
     cb.onStampsLoaded([dateStamp, ...stamps]);
   }
+
+  // Enable drag-to-reorder on the user's stamps. Persist the new order on drop;
+  // if the write fails, reload to fall back to the server's order.
+  Sortable.create(sortableEl, {
+    handle: '.stamp-handle',
+    draggable: '.stamp-item',
+    animation: 150,
+    onEnd: async () => {
+      const ids = Array.from(
+        sortableEl.querySelectorAll<HTMLElement>('.stamp-item'),
+      )
+        .map((elm) => elm.dataset.id)
+        .filter((id): id is string => !!id);
+      try {
+        await reorderStamps(uid, ids);
+      } catch {
+        showToast('שינוי סדר החותמות נכשל.', 'danger');
+        await reload();
+      }
+    },
+  });
 
   addBtn.addEventListener('click', async () => {
     const result = await openStampEditor();

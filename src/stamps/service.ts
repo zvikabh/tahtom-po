@@ -8,6 +8,7 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  writeBatch,
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import type { Stamp, StampElement, StampFont } from './render';
@@ -55,19 +56,45 @@ function decodeElements(stored: StoredElement[]): StampElement[] {
 export async function listStamps(uid: string): Promise<Stamp[]> {
   const q = query(stampsCol(uid), orderBy('createdAt', 'asc'));
   const snap = await getDocs(q);
-  return snap.docs.map((d) => {
+  const items = snap.docs.map((d) => {
     const data = d.data() as {
       elements: StoredElement[];
       width: number;
       height: number;
+      order?: number;
+      createdAt?: { toMillis?: () => number };
     };
+    // Stamps are ordered by an explicit `order` field once the user has
+    // rearranged them; stamps without one (legacy or freshly added) fall back
+    // to creation time, which places them after ordered stamps / at the end.
+    const sortKey =
+      typeof data.order === 'number'
+        ? data.order
+        : (data.createdAt?.toMillis?.() ?? Number.MAX_SAFE_INTEGER);
     return {
-      id: d.id,
-      elements: decodeElements(data.elements),
-      width: data.width ?? 0,
-      height: data.height ?? 0,
+      sortKey,
+      stamp: {
+        id: d.id,
+        elements: decodeElements(data.elements),
+        width: data.width ?? 0,
+        height: data.height ?? 0,
+      } as Stamp,
     };
   });
+  items.sort((a, b) => a.sortKey - b.sortKey);
+  return items.map((i) => i.stamp);
+}
+
+/** Persist a new stamp ordering by writing each stamp's index to `order`. */
+export async function reorderStamps(
+  uid: string,
+  orderedIds: string[],
+): Promise<void> {
+  const batch = writeBatch(db);
+  orderedIds.forEach((id, i) => {
+    batch.update(doc(db, 'users', uid, 'stamps', id), { order: i });
+  });
+  await batch.commit();
 }
 
 export async function addStamp(
