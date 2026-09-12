@@ -21,7 +21,15 @@ function makeDateStamp(): Stamp {
   const yy = String(d.getFullYear() % 100).padStart(2, '0');
   const text = `${dd}/${mm}/${yy}`;
   let elements: StampElement[] = [
-    { kind: 'text', x: 0, y: 0, text, font: 'open-sans', fontSize: DATE_FONT_SIZE },
+    {
+      kind: 'text',
+      x: 0,
+      y: 0,
+      text,
+      font: 'open-sans',
+      fontSize: DATE_FONT_SIZE,
+      dir: 'ltr',
+    },
   ];
   const b = computeBounds(elements);
   if (!b) return { id: DATE_STAMP_ID, elements, width: 1, height: 1 };

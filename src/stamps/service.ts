@@ -28,6 +28,7 @@ type StoredElement =
       text: string;
       font: StampFont;
       fontSize: number;
+      dir?: 'rtl' | 'ltr';
     };
 
 function encodeElements(elements: StampElement[]): StoredElement[] {

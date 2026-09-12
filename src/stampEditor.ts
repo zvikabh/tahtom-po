@@ -245,8 +245,10 @@ export function openStampEditor(): Promise<NewStamp | null> {
       if (textInput) commitTextInput();
       const input = document.createElement('input');
       input.type = 'text';
-      // Match the rendered text: anchored by its right edge, growing left.
-      input.dir = 'ltr';
+      // RTL base direction so neutral characters (e.g. "-") resolve as RTL,
+      // matching how the committed text is rendered. It is right-anchored and
+      // grows left.
+      input.dir = 'rtl';
       input.className = 'se-text-input';
       input.style.position = 'absolute';
       input.style.right = `${W - x}px`;
@@ -285,7 +287,15 @@ export function openStampEditor(): Promise<NewStamp | null> {
       const f = input.dataset.font as StampFont;
       input.remove();
       if (text.length > 0) {
-        elements.push({ kind: 'text', x, y, text, font: f, fontSize: TEXT_SIZE });
+        elements.push({
+          kind: 'text',
+          x,
+          y,
+          text,
+          font: f,
+          fontSize: TEXT_SIZE,
+          dir: 'rtl',
+        });
         redraw();
       }
     }
