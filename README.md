@@ -48,12 +48,16 @@ Targets recent **desktop Chromium** browsers (Chrome / Edge). Copy/Paste of imag
 the async Clipboard API, which is most reliable there.
 
 ## Usage notes
-- **פתיחה** — open an image or PDF (PDF: first page, rasterized at ~150 dpi).
+- **פתיחה** — open an image or PDF. PDFs are rasterized at ~150 dpi and shown as a scrollable
+  vertical stack of pages; stamps can be placed on any page.
 - **הדבקה** — paste an image from the clipboard. Opening/pasting replaces the document and
   clears placed stamps (undoable).
-- Click a stamp in the right-hand pane to enter **placement mode**: it follows the cursor;
-  press `=`/`+` to enlarge or `-` to shrink (10% steps, also via the הגדלה/הקטנה buttons);
-  click to place; `Esc` cancels.
+- Click a stamp in the right-hand pane to enter **placement mode**: it follows the cursor over
+  whichever page it's on; press `=`/`+` to enlarge or `-` to shrink (10% steps, also via the
+  הגדלה/הקטנה buttons); click to place; `Esc` cancels.
 - **בחירה** — select a placed stamp, drag to move it, press `Delete` to remove it.
-- **שמירה** downloads a PNG; **העתקה** copies the flattened image to the clipboard.
+- **שמירה** — images save as PNG; PDFs save as a **stamped PDF** (the original pages are kept
+  vector-crisp via overlay, falling back to rasterizing any page the original can't provide).
+- **העתקה** — copies the page to the clipboard as a PNG. Disabled for multi-page PDFs, since a
+  PDF can't be placed on the clipboard (browser limitation) — use שמירה instead.
 - Create a new stamp with the **+** button in the pane (pen / text / eraser; two Hebrew fonts).

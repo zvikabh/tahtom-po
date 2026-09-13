@@ -38,6 +38,11 @@ body {
   font-size: 0.7rem;
   margin-top: 2px;
 }
+/* Looks disabled but stays hoverable (so its title tooltip shows) and
+   clickable (so a click can explain why it's unavailable). */
+.editor-toolbar .btn.tb-disabled {
+  opacity: 0.5;
+}
 
 .editor-body {
   min-height: 0; /* allow children to scroll */
@@ -62,14 +67,32 @@ body {
   background: #fff;
 }
 
-.editor-doc {
+/* Scrollable vertical stack of page "sheets" (image = 1 page, PDF = N). */
+.editor-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+}
+.editor-page {
   position: relative;
-  margin: 0 auto;
   background: #fff;
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1), 0 4px 16px rgba(0, 0, 0, 0.15);
 }
-.editor-doc > canvas {
+.editor-page > canvas {
   display: block;
+}
+.editor-page-num {
+  position: absolute;
+  top: 4px;
+  left: 4px; /* top-left, appropriate for RTL page content */
+  direction: ltr; /* keep "1 / 3" from being bidi-reversed to "3 / 1" */
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 0.7rem;
+  pointer-events: none;
 }
 
 .placed-stamp {

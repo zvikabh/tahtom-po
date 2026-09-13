@@ -215,3 +215,24 @@ export function drawElementsToCanvas(
   }
   ctx.restore();
 }
+
+/**
+ * Render a stamp to its own transparent canvas at `pxScale` device pixels per
+ * stamp unit. Used to overlay stamps onto exported pages (PNG or embedded in a
+ * PDF). Returns null for a degenerate (zero-size) stamp.
+ */
+export function stampToCanvas(
+  stamp: { elements: StampElement[]; width: number; height: number },
+  pxScale: number,
+): HTMLCanvasElement | null {
+  const w = Math.max(1, Math.round(stamp.width * pxScale));
+  const h = Math.max(1, Math.round(stamp.height * pxScale));
+  if (stamp.width <= 0 || stamp.height <= 0) return null;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d')!;
+  ctx.scale(pxScale, pxScale);
+  drawElementsToCanvas(ctx, stamp.elements);
+  return c;
+}

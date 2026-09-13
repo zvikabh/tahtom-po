@@ -1,15 +1,13 @@
-// Main editor: document canvas, placement/select modes, undo/redo, export,
-// clipboard, PDF/image loading, and the unsaved-changes guard.
+// Main editor: a paged document (image = 1 page, PDF = N pages) shown as a
+// scrollable vertical stack. Handles placement/select modes, undo/redo,
+// PNG/PDF export, clipboard, image/PDF loading, and the unsaved-changes guard.
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.mjs?url';
 import { signOut } from '../auth';
 import { createToolbar } from './toolbar';
 import { createStampsPane } from './pane';
-import {
-  createSvgElement,
-  drawElementsToCanvas,
-  type Stamp,
-} from '../stamps/render';
+import { createSvgElement, drawElementsToCanvas, type Stamp } from '../stamps/render';
+import { buildStampedPdf } from '../export/pdf';
 import { showToast } from '../ui';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
@@ -19,20 +17,27 @@ const SCALE_STEP = 1.1; // 10% per step
 const MIN_SCALE = 0.05;
 const MAX_SCALE = 20;
 const PDF_DPI = 150;
+const CANVAS_PADDING = 48; // px reserved around pages when fitting width
 
+interface Page {
+  canvas: HTMLCanvasElement; // rasterized page at PDF_DPI
+  width: number; // device px
+  height: number;
+}
+interface DocModel {
+  kind: 'image' | 'pdf';
+  pages: Page[];
+  pdfBytes: Uint8Array | null; // original PDF for overlay export (pdf only)
+}
 interface PlacedStamp {
   stampId: string;
-  x: number;
+  pageIndex: number;
+  x: number; // page px (top-left origin)
   y: number;
   scale: number;
 }
-interface Background {
-  canvas: HTMLCanvasElement;
-  width: number;
-  height: number;
-}
 interface DocState {
-  background: Background | null;
+  doc: DocModel | null;
   stamps: PlacedStamp[];
 }
 
@@ -42,21 +47,33 @@ type Mode = 'idle' | 'placement' | 'select';
 // sign-in) so they don't stack up on stale editor instances.
 let activeKeydownHandler: ((e: KeyboardEvent) => void) | null = null;
 let activeBeforeUnloadHandler: ((e: BeforeUnloadEvent) => void) | null = null;
+let activeResizeHandler: (() => void) | null = null;
 
 export function mountEditor(container: HTMLElement, uid: string): void {
   // ---- State ----
-  let current: DocState = { background: null, stamps: [] };
+  let current: DocState = { doc: null, stamps: [] };
   const undoStack: DocState[] = [];
   const redoStack: DocState[] = [];
   let isDirty = false;
 
   let mode: Mode = 'idle';
   let placement: { stamp: Stamp; scale: number } | null = null;
-  let lastCursor: [number, number] = [0, 0];
   let selectedIndex = -1;
 
+  // Display scale (fit-to-width); page-space px * dispScale = on-screen px.
+  let dispScale = 1;
+  // render() rebuilds the page DOM (resetting scroll); it preserves the scroll
+  // position unless this flag asks for a reset (a fresh document).
+  let resetScrollOnNextRender = false;
+
   const stampCache = new Map<string, Stamp>();
-  const overlayNodes: SVGSVGElement[] = [];
+  const overlayNodes: (SVGSVGElement | undefined)[] = [];
+  const pageEls: HTMLElement[] = [];
+
+  // Placement preview.
+  let previewEl: SVGSVGElement | null = null;
+  let hoverPageIndex = -1;
+  let hoverCursorDisp: [number, number] = [0, 0]; // display px within page
 
   // ---- Layout ----
   container.innerHTML = '';
@@ -91,10 +108,10 @@ export function mountEditor(container: HTMLElement, uid: string): void {
   emptyState.textContent = 'העלו או הדביקו כאן תמונה כדי להתחיל';
   canvasArea.appendChild(emptyState);
 
-  const docInner = document.createElement('div');
-  docInner.className = 'editor-doc';
-  docInner.style.display = 'none';
-  canvasArea.appendChild(docInner);
+  const pagesContainer = document.createElement('div');
+  pagesContainer.className = 'editor-pages';
+  pagesContainer.style.display = 'none';
+  canvasArea.appendChild(pagesContainer);
 
   const pane = createStampsPane(uid, {
     onPick: enterPlacement,
@@ -102,10 +119,8 @@ export function mountEditor(container: HTMLElement, uid: string): void {
       for (const s of stamps) stampCache.set(s.id, s);
       render();
     },
-    // After creating a stamp, if a document is loaded, jump straight into
-    // placement mode with it; otherwise leave it in the pane silently.
     onStampAdded: (stamp) => {
-      if (current.background) enterPlacement(stamp);
+      if (current.doc) enterPlacement(stamp);
     },
   });
   // Insert the pane before the canvas area so that, under RTL, it sits on the
@@ -125,7 +140,7 @@ export function mountEditor(container: HTMLElement, uid: string): void {
 
   // ---- State helpers ----
   function cloneState(s: DocState): DocState {
-    return { background: s.background, stamps: s.stamps.map((p) => ({ ...p })) };
+    return { doc: s.doc, stamps: s.stamps.map((p) => ({ ...p })) };
   }
   function applyChange(mutate: () => void) {
     undoStack.push(cloneState(current));
@@ -160,67 +175,119 @@ export function mountEditor(container: HTMLElement, uid: string): void {
     toolbar.setRedoEnabled(redoStack.length > 0);
     toolbar.setResizeEnabled(mode === 'placement');
     toolbar.setSelectActive(mode === 'select');
+    const multiPage = !!current.doc && current.doc.pages.length > 1;
+    toolbar.setCopyEnabled(
+      !!current.doc && !multiPage,
+      multiPage
+        ? "לא ניתן להעתיק PDF מרובה עמודים; השתמשו בכפתור 'שמירה'"
+        : 'העתקה',
+    );
   }
 
-  function setBackground(canvas: HTMLCanvasElement) {
+  function setDocument(doc: DocModel) {
     cancelPlacement();
     selectedIndex = -1;
     if (mode === 'select') mode = 'idle';
+    resetScrollOnNextRender = true; // a new document starts scrolled to the top
     applyChange(() => {
-      current.background = { canvas, width: canvas.width, height: canvas.height };
+      current.doc = doc;
       current.stamps = [];
     });
   }
 
   // ---- Rendering ----
+  function computeDispScale(): number {
+    if (!current.doc || current.doc.pages.length === 0) return 1;
+    const maxW = Math.max(...current.doc.pages.map((p) => p.width));
+    const avail = canvasArea.clientWidth - CANVAS_PADDING;
+    if (avail <= 0 || maxW <= 0) return 1;
+    return Math.min(1, avail / maxW);
+  }
+
   function makeStampSvg(stamp: Stamp, scale: number): SVGSVGElement {
     const svg = createSvgElement(stamp.elements, stamp.width, stamp.height);
-    svg.setAttribute('width', String(stamp.width * scale));
-    svg.setAttribute('height', String(stamp.height * scale));
+    svg.setAttribute('width', String(stamp.width * scale * dispScale));
+    svg.setAttribute('height', String(stamp.height * scale * dispScale));
     return svg;
   }
 
   function render() {
+    const savedScrollTop = canvasArea.scrollTop;
+    const savedScrollLeft = canvasArea.scrollLeft;
     overlayNodes.length = 0;
-    docInner.innerHTML = '';
+    pageEls.length = 0;
+    pagesContainer.innerHTML = '';
 
-    if (!current.background) {
-      docInner.style.display = 'none';
+    if (!current.doc) {
+      pagesContainer.style.display = 'none';
       emptyState.style.display = 'flex';
       return;
     }
     emptyState.style.display = 'none';
-    docInner.style.display = 'block';
-    docInner.style.width = `${current.background.width}px`;
-    docInner.style.height = `${current.background.height}px`;
-    docInner.appendChild(current.background.canvas);
+    pagesContainer.style.display = 'flex';
+    dispScale = computeDispScale();
 
+    current.doc.pages.forEach((page, pageIndex) => {
+      const pageEl = document.createElement('div');
+      pageEl.className = 'editor-page';
+      pageEl.style.width = `${page.width * dispScale}px`;
+      pageEl.style.height = `${page.height * dispScale}px`;
+
+      const canvas = page.canvas;
+      canvas.style.width = '100%';
+      canvas.style.height = '100%';
+      pageEl.appendChild(canvas);
+
+      if (current.doc!.pages.length > 1) {
+        const num = document.createElement('div');
+        num.className = 'editor-page-num';
+        num.textContent = `${pageIndex + 1} / ${current.doc!.pages.length}`;
+        pageEl.appendChild(num);
+      }
+
+      attachPageHandlers(pageEl, pageIndex);
+      pageEls[pageIndex] = pageEl;
+      pagesContainer.appendChild(pageEl);
+    });
+
+    // Placed stamp overlays.
     current.stamps.forEach((ps, i) => {
       const stamp = stampCache.get(ps.stampId);
-      if (!stamp) return;
+      const pageEl = pageEls[ps.pageIndex];
+      if (!stamp || !pageEl) return;
       const node = makeStampSvg(stamp, ps.scale);
       node.classList.add('placed-stamp');
       node.style.position = 'absolute';
-      node.style.left = `${ps.x}px`;
-      node.style.top = `${ps.y}px`;
+      node.style.left = `${ps.x * dispScale}px`;
+      node.style.top = `${ps.y * dispScale}px`;
       node.style.pointerEvents = mode === 'select' ? 'auto' : 'none';
       if (i === selectedIndex) node.classList.add('selected');
       if (mode === 'select') attachDrag(node, i);
       overlayNodes[i] = node;
-      docInner.appendChild(node);
+      pageEl.appendChild(node);
     });
 
+    // Recreate the placement preview (its parent page was just rebuilt).
     if (placement) {
-      const preview = makeStampSvg(placement.stamp, placement.scale);
-      preview.classList.add('stamp-preview');
-      preview.style.position = 'absolute';
-      preview.style.pointerEvents = 'none';
-      preview.style.display = 'none';
-      docInner.appendChild(preview);
-      previewEl = preview;
-      positionPreview();
+      previewEl = makeStampSvg(placement.stamp, placement.scale);
+      previewEl.classList.add('stamp-preview');
+      previewEl.style.position = 'absolute';
+      previewEl.style.pointerEvents = 'none';
+      previewEl.style.display = 'none';
+      updatePreview();
     } else {
       previewEl = null;
+    }
+
+    // Keep the viewport where it was (a rebuild otherwise jumps to the top),
+    // unless a fresh document asked to reset.
+    if (resetScrollOnNextRender) {
+      canvasArea.scrollTop = 0;
+      canvasArea.scrollLeft = 0;
+      resetScrollOnNextRender = false;
+    } else {
+      canvasArea.scrollTop = savedScrollTop;
+      canvasArea.scrollLeft = savedScrollLeft;
     }
   }
 
@@ -231,10 +298,8 @@ export function mountEditor(container: HTMLElement, uid: string): void {
   }
 
   // ---- Placement mode ----
-  let previewEl: SVGSVGElement | null = null;
-
   function enterPlacement(stamp: Stamp) {
-    if (!current.background) {
+    if (!current.doc) {
       showToast('פתחו או הדביקו תמונה לפני הוספת חותמת.', 'warning');
       return;
     }
@@ -252,50 +317,62 @@ export function mountEditor(container: HTMLElement, uid: string): void {
     render();
     updateToolbar();
   }
-  function positionPreview() {
-    if (!previewEl || !placement) return;
-    const w = placement.stamp.width * placement.scale;
-    const h = placement.stamp.height * placement.scale;
-    previewEl.style.left = `${lastCursor[0] - w / 2}px`;
-    previewEl.style.top = `${lastCursor[1] - h / 2}px`;
+  function updatePreview() {
+    if (!placement || !previewEl) return;
+    const pageEl = pageEls[hoverPageIndex];
+    if (hoverPageIndex < 0 || !pageEl) {
+      previewEl.style.display = 'none';
+      return;
+    }
+    const w = placement.stamp.width * placement.scale * dispScale;
+    const h = placement.stamp.height * placement.scale * dispScale;
+    previewEl.setAttribute('width', String(w));
+    previewEl.setAttribute('height', String(h));
+    if (previewEl.parentElement !== pageEl) pageEl.appendChild(previewEl);
+    previewEl.style.left = `${hoverCursorDisp[0] - w / 2}px`;
+    previewEl.style.top = `${hoverCursorDisp[1] - h / 2}px`;
     previewEl.style.display = 'block';
   }
   function enlarge() {
     if (mode !== 'placement' || !placement) return;
     placement.scale = Math.min(MAX_SCALE, placement.scale * SCALE_STEP);
-    render();
+    updatePreview();
   }
   function shrink() {
     if (mode !== 'placement' || !placement) return;
     placement.scale = Math.max(MIN_SCALE, placement.scale / SCALE_STEP);
-    render();
+    updatePreview();
   }
 
-  docInner.addEventListener('pointermove', (e) => {
-    if (mode !== 'placement' || !placement) return;
-    const r = docInner.getBoundingClientRect();
-    lastCursor = [e.clientX - r.left, e.clientY - r.top];
-    positionPreview();
-  });
-
-  docInner.addEventListener('click', (e) => {
-    if (mode === 'placement' && placement) {
-      const r = docInner.getBoundingClientRect();
-      const cx = e.clientX - r.left;
-      const cy = e.clientY - r.top;
-      const sw = placement.stamp.width * placement.scale;
-      const sh = placement.stamp.height * placement.scale;
-      const stampId = placement.stamp.id;
-      const scale = placement.scale;
-      const x = cx - sw / 2;
-      const y = cy - sh / 2;
-      cancelPlacement();
-      applyChange(() => current.stamps.push({ stampId, x, y, scale }));
-    } else if (mode === 'select' && e.target === current.background?.canvas) {
-      selectedIndex = -1;
-      updateSelectionClasses();
-    }
-  });
+  function attachPageHandlers(pageEl: HTMLElement, pageIndex: number) {
+    pageEl.addEventListener('pointermove', (e) => {
+      if (mode !== 'placement' || !placement) return;
+      const r = pageEl.getBoundingClientRect();
+      hoverPageIndex = pageIndex;
+      hoverCursorDisp = [e.clientX - r.left, e.clientY - r.top];
+      updatePreview();
+    });
+    pageEl.addEventListener('click', (e) => {
+      if (mode === 'placement' && placement) {
+        const r = pageEl.getBoundingClientRect();
+        const px = (e.clientX - r.left) / dispScale;
+        const py = (e.clientY - r.top) / dispScale;
+        const sw = placement.stamp.width * placement.scale;
+        const sh = placement.stamp.height * placement.scale;
+        const stampId = placement.stamp.id;
+        const scale = placement.scale;
+        const x = px - sw / 2;
+        const y = py - sh / 2;
+        cancelPlacement();
+        applyChange(() =>
+          current.stamps.push({ stampId, pageIndex, x, y, scale }),
+        );
+      } else if (mode === 'select' && e.target instanceof HTMLCanvasElement) {
+        selectedIndex = -1;
+        updateSelectionClasses();
+      }
+    });
+  }
 
   // ---- Select / drag ----
   function attachDrag(node: SVGSVGElement, index: number) {
@@ -306,22 +383,21 @@ export function mountEditor(container: HTMLElement, uid: string): void {
       updateSelectionClasses();
 
       const pre = cloneState(current);
-      const r = docInner.getBoundingClientRect();
-      const startPx = e.clientX - r.left;
-      const startPy = e.clientY - r.top;
+      const startClientX = e.clientX;
+      const startClientY = e.clientY;
       const startX = current.stamps[index].x;
       const startY = current.stamps[index].y;
       let moved = false;
       node.setPointerCapture(e.pointerId);
 
       const onMove = (ev: PointerEvent) => {
-        const dx = ev.clientX - r.left - startPx;
-        const dy = ev.clientY - r.top - startPy;
-        if (Math.abs(dx) > 1 || Math.abs(dy) > 1) moved = true;
-        current.stamps[index].x = startX + dx;
-        current.stamps[index].y = startY + dy;
-        node.style.left = `${current.stamps[index].x}px`;
-        node.style.top = `${current.stamps[index].y}px`;
+        const dxDisp = ev.clientX - startClientX;
+        const dyDisp = ev.clientY - startClientY;
+        if (Math.abs(dxDisp) > 1 || Math.abs(dyDisp) > 1) moved = true;
+        current.stamps[index].x = startX + dxDisp / dispScale;
+        current.stamps[index].y = startY + dyDisp / dispScale;
+        node.style.left = `${current.stamps[index].x * dispScale}px`;
+        node.style.top = `${current.stamps[index].y * dispScale}px`;
       };
       const onUp = (ev: PointerEvent) => {
         node.removeEventListener('pointermove', onMove);
@@ -366,7 +442,6 @@ export function mountEditor(container: HTMLElement, uid: string): void {
     const tag = (document.activeElement?.tagName || '').toLowerCase();
     if (tag === 'input' || tag === 'textarea') return;
 
-    // Ctrl (Windows/Linux) or Cmd (Mac) shortcuts.
     const accel = e.ctrlKey || e.metaKey;
     if (accel && !e.altKey && !e.shiftKey) {
       const key = e.key.toLowerCase();
@@ -410,6 +485,14 @@ export function mountEditor(container: HTMLElement, uid: string): void {
   window.addEventListener('keydown', onKeydown);
   activeKeydownHandler = onKeydown;
 
+  // Re-fit pages to the available width when the window resizes.
+  if (activeResizeHandler) window.removeEventListener('resize', activeResizeHandler);
+  const onResize = () => {
+    if (current.doc) render();
+  };
+  window.addEventListener('resize', onResize);
+  activeResizeHandler = onResize;
+
   // ---- Loading images / PDFs ----
   function openFile() {
     fileInput.click();
@@ -434,22 +517,36 @@ export function mountEditor(container: HTMLElement, uid: string): void {
     c.height = bmp.height;
     c.getContext('2d')!.drawImage(bmp, 0, 0);
     bmp.close();
-    setBackground(c);
+    setDocument({
+      kind: 'image',
+      pages: [{ canvas: c, width: c.width, height: c.height }],
+      pdfBytes: null,
+    });
   }
 
   async function loadPdf(file: File) {
-    const data = await file.arrayBuffer();
-    const pdf = await pdfjsLib.getDocument({ data }).promise;
-    const page = await pdf.getPage(1);
-    const viewport = page.getViewport({ scale: PDF_DPI / 72 });
-    const c = document.createElement('canvas');
-    c.width = Math.ceil(viewport.width);
-    c.height = Math.ceil(viewport.height);
-    await page.render({ canvasContext: c.getContext('2d')!, viewport }).promise;
-    setBackground(c);
-    if (pdf.numPages > 1) {
-      showToast('הקובץ מכיל כמה עמודים; נטען העמוד הראשון בלבד.', 'info');
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    // pdf.js may detach the buffer it's given, so hand it a copy and keep the
+    // pristine bytes for export. disableFontFace renders glyph outlines directly
+    // to the canvas, avoiding font-loading stalls during rasterization.
+    const pdf = await pdfjsLib.getDocument({
+      data: bytes.slice(),
+      disableFontFace: true,
+      // base-14 standard font data (served from public/), so PDFs that don't
+      // embed their fonts still render correctly.
+      standardFontDataUrl: `${import.meta.env.BASE_URL}standard_fonts/`,
+    }).promise;
+    const pages: Page[] = [];
+    for (let n = 1; n <= pdf.numPages; n++) {
+      const page = await pdf.getPage(n);
+      const viewport = page.getViewport({ scale: PDF_DPI / 72 });
+      const c = document.createElement('canvas');
+      c.width = Math.ceil(viewport.width);
+      c.height = Math.ceil(viewport.height);
+      await page.render({ canvasContext: c.getContext('2d')!, viewport }).promise;
+      pages.push({ canvas: c, width: c.width, height: c.height });
     }
+    setDocument({ kind: 'pdf', pages, pdfBytes: bytes });
   }
 
   async function paste() {
@@ -469,7 +566,11 @@ export function mountEditor(container: HTMLElement, uid: string): void {
           c.height = bmp.height;
           c.getContext('2d')!.drawImage(bmp, 0, 0);
           bmp.close();
-          setBackground(c);
+          setDocument({
+            kind: 'image',
+            pages: [{ canvas: c, width: c.width, height: c.height }],
+            pdfBytes: null,
+          });
           return;
         }
       }
@@ -480,18 +581,17 @@ export function mountEditor(container: HTMLElement, uid: string): void {
   }
 
   // ---- Export ----
-  async function flatten(): Promise<HTMLCanvasElement | null> {
-    if (!current.background) {
-      showToast('אין תמונה לשמירה.', 'warning');
-      return null;
-    }
-    await document.fonts.ready;
+  // Flatten one page (its raster + stamps) to a new canvas at native px.
+  function flattenPage(i: number): HTMLCanvasElement | null {
+    if (!current.doc) return null;
+    const page = current.doc.pages[i];
     const c = document.createElement('canvas');
-    c.width = current.background.width;
-    c.height = current.background.height;
+    c.width = page.width;
+    c.height = page.height;
     const ctx = c.getContext('2d')!;
-    ctx.drawImage(current.background.canvas, 0, 0);
+    ctx.drawImage(page.canvas, 0, 0);
     for (const ps of current.stamps) {
+      if (ps.pageIndex !== i) continue;
       const stamp = stampCache.get(ps.stampId);
       if (!stamp) continue;
       ctx.save();
@@ -505,29 +605,68 @@ export function mountEditor(container: HTMLElement, uid: string): void {
 
   function canvasToBlob(c: HTMLCanvasElement): Promise<Blob> {
     return new Promise((resolve, reject) => {
-      c.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/png');
+      c.toBlob(
+        (b) => (b ? resolve(b) : reject(new Error('toBlob failed'))),
+        'image/png',
+      );
     });
   }
 
-  async function save() {
-    const c = await flatten();
-    if (!c) return;
-    const blob = await canvasToBlob(c);
+  function downloadBlob(blob: Blob, name: string) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'tahtom-po.png';
+    a.download = name;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function save() {
+    if (!current.doc) {
+      showToast('אין מסמך לשמירה.', 'warning');
+      return;
+    }
+    await document.fonts.ready;
+    if (current.doc.kind === 'pdf') {
+      try {
+        const blob = await buildStampedPdf(
+          current.doc.pages,
+          current.doc.pdfBytes ? current.doc.pdfBytes.slice() : null,
+          current.stamps,
+          (id) => stampCache.get(id),
+          PDF_DPI,
+        );
+        downloadBlob(blob, 'tahtom-po.pdf');
+      } catch {
+        showToast('יצירת קובץ ה-PDF נכשלה.', 'danger');
+        return;
+      }
+    } else {
+      const c = flattenPage(0);
+      if (!c) return;
+      downloadBlob(await canvasToBlob(c), 'tahtom-po.png');
+    }
     isDirty = false;
   }
 
   async function copy() {
+    if (!current.doc) {
+      showToast('אין מסמך להעתקה.', 'warning');
+      return;
+    }
+    if (current.doc.pages.length > 1) {
+      showToast(
+        "לא ניתן להעתיק PDF מרובה עמודים ללוח; השתמשו בכפתור 'שמירה'.",
+        'warning',
+      );
+      return;
+    }
     if (!navigator.clipboard?.write) {
       showToast('הדפדפן אינו תומך בהעתקה ללוח.', 'danger');
       return;
     }
-    const c = await flatten();
+    await document.fonts.ready;
+    const c = flattenPage(0);
     if (!c) return;
     try {
       const blob = await canvasToBlob(c);
@@ -544,7 +683,7 @@ export function mountEditor(container: HTMLElement, uid: string): void {
     window.removeEventListener('beforeunload', activeBeforeUnloadHandler);
   }
   const onBeforeUnload = (e: BeforeUnloadEvent) => {
-    if (current.background && isDirty) {
+    if (current.doc && isDirty) {
       e.preventDefault();
       e.returnValue = '';
     }

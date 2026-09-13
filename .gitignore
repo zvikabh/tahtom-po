@@ -5,6 +5,9 @@ dist/
 *.log
 .DS_Store
 
+# Generated at dev/build time from pdfjs-dist (see scripts/copy-pdf-fonts.mjs)
+public/standard_fonts/
+
 # Local Firebase web config (optional — see README)
 .env
 .env.local

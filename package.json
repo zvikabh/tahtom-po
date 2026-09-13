@@ -4,14 +4,15 @@
   "description": "תחתום-פה — add reusable stamps onto images and sign documents",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
+    "dev": "node scripts/copy-pdf-fonts.mjs && vite",
+    "build": "node scripts/copy-pdf-fonts.mjs && tsc && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
     "bootstrap": "^5.3.3",
     "bootstrap-icons": "^1.11.3",
     "firebase": "^10.12.2",
+    "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^4.4.168",
     "sortablejs": "^1.15.7"
   },

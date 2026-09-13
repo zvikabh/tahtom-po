@@ -36,6 +36,7 @@ export interface Toolbar {
   setRedoEnabled(v: boolean): void;
   setResizeEnabled(v: boolean): void;
   setSelectActive(v: boolean): void;
+  setCopyEnabled(v: boolean, title?: string): void;
 }
 
 export function createToolbar(cb: ToolbarCallbacks): Toolbar {
@@ -77,5 +78,14 @@ export function createToolbar(cb: ToolbarCallbacks): Toolbar {
       buttons.get('shrink')!.disabled = !v;
     },
     setSelectActive: (v) => buttons.get('toggleSelect')!.classList.toggle('active', v),
+    setCopyEnabled: (v, title) => {
+      // Not the `disabled` property: a disabled button suppresses its title
+      // tooltip. Grey it out visually but keep it hoverable/clickable — copy()
+      // itself explains (via a toast) why it can't run for multi-page PDFs.
+      const b = buttons.get('copy')!;
+      b.classList.toggle('tb-disabled', !v);
+      b.setAttribute('aria-disabled', String(!v));
+      b.title = title ?? 'העתקה';
+    },
   };
 }
